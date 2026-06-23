@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-06-23T16:38:40.984606",
+  "replacements": [
+    {
+      "old": "MEGA DIGITAL LLC",
+      "new": "Bigthing Co. LTD"
+    }
+  ],
+  "summary": {
+    "ok": 1,
+    "no_match": 0,
+    "error": 0,
+    "total_replacements": 2
+  },
+  "files": [
+    {
+      "file": "invoices/Prod_V2_Invoice-Customer-MUUS20257380421-7545784257831256081.pdf",
+      "status": "ok",
+      "pages": [
+        {
+          "page": 1,
+          "matches": [
+            {
+              "old": "MEGA DIGITAL LLC",
+              "new": "Bigthing Co. LTD",
+              "pdf_coords": {
+                "x0": 111.6,
+                "y0": 665.05,
+                "x1": 182.5,
+                "y1": 674.05
+              }
+            },
+            {
+              "old": "MEGA DIGITAL LLC",
+              "new": "Bigthing Co. LTD",
+              "pdf_coords": {
+                "x0": 135.4,
+                "y0": 533.85,
+                "x1": 202.93,
+                "y1": 542.85
+              }
+            }
+          ]
+        },
+        {
+          "page": 2,
+          "matches": []
+        }
+      ],
+      "total_replacements": 2,
+      "error": null
+    }
+  ]
+}
