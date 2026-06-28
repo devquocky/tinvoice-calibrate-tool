@@ -13,8 +13,8 @@ import argparse
 import json
 import shutil
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 try:
     import pypdfium2 as pdfium
@@ -36,8 +36,9 @@ PDF_DPI      = 72         # PDF coordinate space
 PADDING_X    = 2          # px padding ngang khi vẽ rect che
 PADDING_Y    = 2          # px padding dọc
 
-# Font tùy chỉnh — override bằng --font và --font-size khi chạy
+# Font tùy chỉnh — override bằng --font, --font-bold, --font-size-scale khi chạy
 FONT_NAME         = "arial"   # arial | carlito | lato
+FONT_BOLD = False  # True = dùng Bold variant
 FONT_SIZE_SCALE   = 1.0       # nhân thêm vào font size đọc từ PDF (1.0 = giữ nguyên)
 
 
@@ -86,54 +87,89 @@ def _sample_bg_color(img: Image.Image, px0, py0, px1, py1) -> tuple:
 # Cache font objects để không load lại mỗi lần
 _font_cache: dict = {}
 
+# Thư mục fonts/ bundle cạnh script
+_FONTS_DIR = Path(__file__).parent / "fonts"
+
+# Map (font_name, bold) → danh sách path ưu tiên
+# Bundle trước, hệ thống sau, fallback cuối
+_FONT_PATHS: dict[tuple, list] = {
+    ("arial", False): [
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ],
+    ("arial", True): [
+        "C:/Windows/Fonts/arialbd.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ],
+    ("carlito", False): [
+        str(_FONTS_DIR / "Carlito-Regular.ttf"),
+        "C:/Windows/Fonts/Carlito-Regular.ttf",
+        "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
+        # fallback
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ],
+    ("carlito", True): [
+        str(_FONTS_DIR / "Carlito-Bold.ttf"),
+        "C:/Windows/Fonts/Carlito-Bold.ttf",
+        "/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf",
+        # fallback
+        "C:/Windows/Fonts/arialbd.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    ],
+    ("lato", False): [
+        str(_FONTS_DIR / "Lato-Regular.ttf"),
+        "C:/Windows/Fonts/Lato-Regular.ttf",
+        "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
+        # fallback
+        "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    ],
+    ("lato", True): [
+        str(_FONTS_DIR / "Lato-Bold.ttf"),
+        "C:/Windows/Fonts/Lato-Bold.ttf",
+        "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
+        # fallback
+        "/usr/share/fonts/truetype/crosextra/Carlito-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+    ],
+}
+
+
+def resolve_font_path(font_name: str, bold: bool = False) -> str | None:
+    """Trả về path font đầu tiên tìm thấy, hoặc None nếu không có."""
+    key = (font_name.lower(), bold)
+    candidates = _FONT_PATHS.get(key, _FONT_PATHS[("arial", False)])
+    for path in candidates:
+        if Path(path).exists():
+            return path
+    return None
+
+
 def _pick_font(font_size_pt: float, render_scale: float,
-               font_name: str = "arial", font_size_scale: float = 1.0):
+               font_name: str = "arial", font_size_scale: float = 1.0,
+               bold: bool = False):
     """
-    Chọn font theo tên (arial/carlito/lato) với size từ PDF metadata.
-    font_size_scale: hệ số nhân thêm (1.0 = giữ nguyên, 1.1 = to hơn 10%)
+    Chọn font theo tên (arial/carlito/lato), variant (regular/bold),
+    và size từ PDF metadata × scale.
     """
     size = max(6, int(font_size_pt * render_scale * font_size_scale))
-    cache_key = (font_name.lower(), size)
+    cache_key = (font_name.lower(), bold, size)
     if cache_key in _font_cache:
         return _font_cache[cache_key]
 
-    # Map tên → danh sách path ưu tiên
-    font_map = {
-        "arial": [
-            "arial.ttf", "Arial.ttf",
-            "C:/Windows/Fonts/arial.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ],
-        "carlito": [
-            "Carlito-Regular.ttf", "carlito.ttf",
-            "C:/Windows/Fonts/Carlito-Regular.ttf",
-            "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
-            # fallback về arial nếu không có
-            "arial.ttf", "Arial.ttf",
-            "C:/Windows/Fonts/arial.ttf",
-        ],
-        "lato": [
-            "Lato-Regular.ttf", "lato.ttf",
-            "C:/Windows/Fonts/Lato-Regular.ttf",
-            # Tìm trong thư mục cùng script
-            str(Path(__file__).parent / "fonts" / "Lato-Regular.ttf"),
-            "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
-            # fallback về carlito rồi arial
-            "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
-            "arial.ttf", "C:/Windows/Fonts/arial.ttf",
-        ],
-    }
-
-    candidates = font_map.get(font_name.lower(), font_map["arial"])
-    for candidate in candidates:
+    path = resolve_font_path(font_name, bold)
+    if path:
         try:
-            font = ImageFont.truetype(candidate, size, encoding="unic")
+            font = ImageFont.truetype(path, size, encoding="unic")
             _font_cache[cache_key] = font
             return font
         except (IOError, OSError):
-            continue
+            pass
 
+    # Hard fallback
     font = ImageFont.load_default()
     _font_cache[cache_key] = font
     return font
@@ -210,7 +246,8 @@ def process_page(page, replacements: list[dict], verbose: bool, dry_run: bool) -
         font_size_pt = _get_font_size_for_match(page, m)
         font = _pick_font(font_size_pt, RENDER_SCALE,
                           font_name=FONT_NAME,
-                          font_size_scale=FONT_SIZE_SCALE)
+                          font_size_scale=FONT_SIZE_SCALE,
+                          bold=FONT_BOLD)
 
         # Vertical alignment: dùng baseline y0 từ PDF gốc (không dùng py0 sau padding)
         # PDF y0 = bottom of text bbox; convert sang pixel top-of-text bằng cách
@@ -388,15 +425,18 @@ def main():
     p.add_argument("--font",      default="arial",
                    choices=["arial", "carlito", "lato"],
                    help="Font chữ cho text thay thế (mặc định: arial)")
+    p.add_argument("--font-bold", action="store_true", dest="font_bold",
+                   help="Dùng Bold variant của font")
     p.add_argument("--font-size-scale", type=float, default=1.0,
                    dest="font_size_scale",
                    help="Hệ số nhân font size (mặc định: 1.0, to hơn: 1.1, nhỏ hơn: 0.9)")
     main_args = p.parse_args()
 
     # Apply font settings vào global config
-    import sys as _sys, types as _types
+    import sys as _sys
     _mod = _sys.modules[__name__]
     _mod.FONT_NAME       = main_args.font
+    _mod.FONT_BOLD = main_args.font_bold
     _mod.FONT_SIZE_SCALE = main_args.font_size_scale
 
     run_batch(main_args)

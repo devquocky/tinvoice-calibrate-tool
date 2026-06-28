@@ -179,6 +179,58 @@ class PDFReplaceUI:
                        fg=TEXT, font=FONT_UI,
                        activebackground=PANEL).pack(side="left")
 
+        # ── Font controls ─────────────────────────────────────────────────
+        font_row = tk.Frame(io_frame, bg=PANEL)
+        font_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        tk.Label(font_row, text="Font:", bg=PANEL,
+                 fg=TEXT, font=FONT_HEAD).pack(side="left")
+
+        self.font_var = tk.StringVar(value="arial")
+        font_menu = ttk.Combobox(font_row, textvariable=self.font_var,
+                                 values=["arial", "carlito", "lato"],
+                                 state="readonly", width=10, font=FONT_UI)
+        font_menu.pack(side="left", padx=(6, 12))
+
+        self.font_bold_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(font_row, text="Bold",
+                       variable=self.font_bold_var, bg=PANEL,
+                       fg=TEXT, font=FONT_UI,
+                       activebackground=PANEL).pack(side="left", padx=(0, 16))
+
+        tk.Label(font_row, text="Size scale:", bg=PANEL,
+                 fg=TEXT, font=FONT_HEAD).pack(side="left")
+
+        self.font_scale_var = tk.DoubleVar(value=1.0)
+        scale_frame = tk.Frame(font_row, bg=PANEL)
+        scale_frame.pack(side="left", padx=(6, 0))
+
+        self.scale_slider = tk.Scale(
+            scale_frame, variable=self.font_scale_var,
+            from_=0.7, to=1.5, resolution=0.05,
+            orient="horizontal", length=120,
+            bg=PANEL, fg=TEXT, highlightthickness=0,
+            troughcolor=BORDER, activebackground=ACCENT,
+            font=("Segoe UI", 7),
+            command=self._update_scale_label,
+        )
+        self.scale_slider.pack(side="left")
+
+        self.scale_label = tk.Label(scale_frame, text="1.00×",
+                                    bg=PANEL, fg=ACCENT,
+                                    font=("Segoe UI", 9, "bold"), width=5)
+        self.scale_label.pack(side="left", padx=(4, 0))
+
+        # Preview font
+        self.font_preview = tk.Label(font_row, text="AaBbCc 123",
+                                     bg=PANEL, fg=TEXT_SUB,
+                                     font=("Arial", 9), width=14,
+                                     relief="solid", bd=1, padx=6)
+        self.font_preview.pack(side="left", padx=(16, 0))
+        font_menu.bind("<<ComboboxSelected>>", self._update_font_preview)
+        self.font_bold_var.trace_add("write",
+                                     lambda *_: self._update_font_preview())
+
         # ── Row 1: Replacements Section ───────────────────────────────────────
         rep_outer = tk.LabelFrame(body, text=" Replacements ", bg=PANEL,
                                   fg=TEXT_SUB, font=FONT_UI,
@@ -321,6 +373,22 @@ class PDFReplaceUI:
         return reps
 
     # ── File operations ───────────────────────────────────────────────────────
+    def _update_scale_label(self, val=None):
+        v = self.font_scale_var.get()
+        self.scale_label.configure(text=f"{v:.2f}×")
+
+    def _update_font_preview(self, event=None):
+        font_name = self.font_var.get().capitalize()
+        bold = self.font_bold_var.get()
+        weight = "bold" if bold else "normal"
+        try:
+            self.font_preview.configure(
+                font=(font_name, 9, weight),
+                text="AaBbCc 123"
+            )
+        except Exception:
+            self.font_preview.configure(font=("Arial", 9, weight))
+
     def _browse_input(self):
         path = filedialog.askdirectory(title="Chọn folder PDF đầu vào")
         if path:
@@ -403,12 +471,17 @@ class PDFReplaceUI:
         self._set_status("Đang xử lý…", ACCENT)
         self._log(f"Bắt đầu — input: {input_dir}", "info")
 
+        font_cfg = {
+            "font_name":       self.font_var.get(),
+            "font_bold":       self.font_bold_var.get(),
+            "font_size_scale": self.font_scale_var.get(),
+        }
         thread = threading.Thread(target=self._run_worker,
-                                  args=(input_dir, output_dir, reps),
+                                  args=(input_dir, output_dir, reps, font_cfg),
                                   daemon=True)
         thread.start()
 
-    def _run_worker(self, input_dir, output_dir, reps):
+    def _run_worker(self, input_dir, output_dir, reps, font_cfg: dict):
         try:
             # Import engine
             engine_path = Path(__file__).parent / "pdf_replace.py"
@@ -422,6 +495,23 @@ class PDFReplaceUI:
             spec = importlib.util.spec_from_file_location("pdf_replace", engine_path)
             engine = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(engine)
+
+            # Apply font settings
+            engine.FONT_NAME       = font_cfg["font_name"]
+            engine.FONT_BOLD       = font_cfg["font_bold"]
+            engine.FONT_SIZE_SCALE = font_cfg["font_size_scale"]
+
+            # Log font config
+            bold_str = " Bold" if font_cfg["font_bold"] else ""
+            scale_str = f'{font_cfg["font_size_scale"]:.2f}×'
+            self.root.after(0, self._log,
+                f'Font: {font_cfg["font_name"].capitalize()}{bold_str}, scale={scale_str}', "info")
+
+            # Warn nếu font không tìm thấy
+            path = engine.resolve_font_path(font_cfg["font_name"], font_cfg["font_bold"])
+            if not path:
+                self.root.after(0, self._log,
+                    f'⚠ Không tìm thấy {font_cfg["font_name"]} — fallback sang Arial', "warn")
 
             # Collect files
             pdf_files = sorted(Path(input_dir).rglob("*.pdf"))
