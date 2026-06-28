@@ -1,3 +1,4 @@
 invoices/
 output/
 __pycache__/
+.idea/

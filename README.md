@@ -332,3 +332,41 @@ File PDF gốc (text PDF)
         │
         └─→ KHÔNG dùng làm input lần tiếp theo ✗
 ```
+
+---
+
+## Tùy chỉnh font
+
+### Các font hỗ trợ
+
+| Font | Ghi chú |
+|---|---|
+| `arial` | Mặc định, có sẵn trên mọi Windows |
+| `carlito` | Metric tương đương Calibri, cần cài hoặc đặt vào `fonts/` |
+| `lato` | Font hiện đại, đi kèm sẵn trong thư mục `fonts/` của project |
+
+**Để dùng Carlito trên Windows:** Tải tại https://fonts.google.com/specimen/Carlito, đặt `Carlito-Regular.ttf` vào thư mục `fonts/` cạnh script, hoặc cài vào hệ thống.
+
+**Lato** đã được đóng gói sẵn trong thư mục `fonts/` — không cần cài thêm.
+
+### CLI
+
+```bat
+:: Dùng Lato, giữ nguyên size
+pdf_replace.bat --input C:\invoices --config rep.json --output C:\output --font lato
+
+:: Dùng Carlito, to hơn 5%
+pdf_replace.bat --input C:\invoices --config rep.json --output C:\output --font carlito --font-size-scale 1.05
+
+:: Nhỏ hơn 10%
+pdf_replace.bat --input C:\invoices --config rep.json --output C:\output --font-size-scale 0.9
+```
+
+### UI
+
+Bổ sung trong phiên bản UI tiếp theo — hiện tại chỉnh font qua CLI hoặc sửa trực tiếp hai dòng đầu trong `pdf_replace.py`:
+
+```python
+FONT_NAME       = "lato"   # arial | carlito | lato
+FONT_SIZE_SCALE = 1.0      # 1.0 = giữ nguyên
+```

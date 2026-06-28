@@ -36,6 +36,10 @@ PDF_DPI      = 72         # PDF coordinate space
 PADDING_X    = 2          # px padding ngang khi vẽ rect che
 PADDING_Y    = 2          # px padding dọc
 
+# Font tùy chỉnh — override bằng --font và --font-size khi chạy
+FONT_NAME         = "arial"   # arial | carlito | lato
+FONT_SIZE_SCALE   = 1.0       # nhân thêm vào font size đọc từ PDF (1.0 = giữ nguyên)
+
 
 # ─── Core ─────────────────────────────────────────────────────────────────────
 
@@ -79,30 +83,60 @@ def _sample_bg_color(img: Image.Image, px0, py0, px1, py1) -> tuple:
     return color[:3]
 
 
-def _pick_font(font_size_pt: float, render_scale: float):
+# Cache font objects để không load lại mỗi lần
+_font_cache: dict = {}
+
+def _pick_font(font_size_pt: float, render_scale: float,
+               font_name: str = "arial", font_size_scale: float = 1.0):
     """
-    Chọn font đúng kích thước dựa trên font size pt từ PDF gốc.
-    PIL truetype nhận size theo pt, render tại DPI = render_scale * 72.
-    Truyền render_scale để PIL biết DPI thực tế khi rasterize.
+    Chọn font theo tên (arial/carlito/lato) với size từ PDF metadata.
+    font_size_scale: hệ số nhân thêm (1.0 = giữ nguyên, 1.1 = to hơn 10%)
     """
-    size = max(6, int(font_size_pt * render_scale))
-    # Thử load font Windows phổ biến
-    font_candidates = [
-        "arial.ttf", "Arial.ttf",
-        "calibri.ttf", "Calibri.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/calibri.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    dpi = int(render_scale * 72)
-    for candidate in font_candidates:
+    size = max(6, int(font_size_pt * render_scale * font_size_scale))
+    cache_key = (font_name.lower(), size)
+    if cache_key in _font_cache:
+        return _font_cache[cache_key]
+
+    # Map tên → danh sách path ưu tiên
+    font_map = {
+        "arial": [
+            "arial.ttf", "Arial.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ],
+        "carlito": [
+            "Carlito-Regular.ttf", "carlito.ttf",
+            "C:/Windows/Fonts/Carlito-Regular.ttf",
+            "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
+            # fallback về arial nếu không có
+            "arial.ttf", "Arial.ttf",
+            "C:/Windows/Fonts/arial.ttf",
+        ],
+        "lato": [
+            "Lato-Regular.ttf", "lato.ttf",
+            "C:/Windows/Fonts/Lato-Regular.ttf",
+            # Tìm trong thư mục cùng script
+            str(Path(__file__).parent / "fonts" / "Lato-Regular.ttf"),
+            "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
+            # fallback về carlito rồi arial
+            "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
+            "arial.ttf", "C:/Windows/Fonts/arial.ttf",
+        ],
+    }
+
+    candidates = font_map.get(font_name.lower(), font_map["arial"])
+    for candidate in candidates:
         try:
-            return ImageFont.truetype(candidate, size, encoding="unic")
+            font = ImageFont.truetype(candidate, size, encoding="unic")
+            _font_cache[cache_key] = font
+            return font
         except (IOError, OSError):
             continue
-    # Fallback PIL built-in (sẽ nhỏ hơn mong muốn)
-    return ImageFont.load_default()
+
+    font = ImageFont.load_default()
+    _font_cache[cache_key] = font
+    return font
 
 
 def _get_font_size_for_match(page, match: dict) -> float:
@@ -174,11 +208,15 @@ def process_page(page, replacements: list[dict], verbose: bool, dry_run: bool) -
 
         # Đọc font size pt trực tiếp từ PDF text object — không đoán qua bbox
         font_size_pt = _get_font_size_for_match(page, m)
-        font = _pick_font(font_size_pt, RENDER_SCALE)
+        font = _pick_font(font_size_pt, RENDER_SCALE,
+                          font_name=FONT_NAME,
+                          font_size_scale=FONT_SIZE_SCALE)
 
-        # Vẽ text mới — vertical center trong bbox gốc
-        text_y = py0 + PADDING_Y * 0.5
-        draw.text((px0 + PADDING_X, text_y), m["new"], fill=(0, 0, 0), font=font)
+        # Vertical alignment: dùng baseline y0 từ PDF gốc (không dùng py0 sau padding)
+        # PDF y0 = bottom of text bbox; convert sang pixel top-of-text bằng cách
+        # lấy y1 (top trong PDF coords) → py_baseline đúng với text gốc
+        _, py_text_top = _pdf_to_px(m["x0"], m["y1"], w_pt, h_pt, img_w, img_h)
+        draw.text((px0 + PADDING_X, py_text_top), m["new"], fill=(0, 0, 0), font=font)
 
     return img, match_log
 
@@ -295,15 +333,9 @@ def run_batch(args):
                 rel = pdf_path.relative_to(input_path if input_path.is_dir() else input_path.parent)
             except ValueError:
                 rel = pdf_path.name
-            # Thêm suffix vào stem nếu có
-            if args.suffix:
-                rel = rel.with_name(rel.stem + args.suffix + rel.suffix)
             out_path = output_dir / rel
         else:
-            if args.suffix:
-                out_path = pdf_path.with_name(pdf_path.stem + args.suffix + pdf_path.suffix)
-            else:
-                out_path = pdf_path
+            out_path = pdf_path
 
         print(f"  {pdf_path.name}", end=" ... ", flush=True)
 
@@ -353,8 +385,20 @@ def main():
     p.add_argument("--dry-run",   action="store_true")
     p.add_argument("--verbose",   action="store_true")
     p.add_argument("--log",       default="pdf_replace_log.json")
-    p.add_argument("--suffix",    default="", help="Hậu tố thêm vào tên file output, VD: _replaced, _v2")
+    p.add_argument("--font",      default="arial",
+                   choices=["arial", "carlito", "lato"],
+                   help="Font chữ cho text thay thế (mặc định: arial)")
+    p.add_argument("--font-size-scale", type=float, default=1.0,
+                   dest="font_size_scale",
+                   help="Hệ số nhân font size (mặc định: 1.0, to hơn: 1.1, nhỏ hơn: 0.9)")
     main_args = p.parse_args()
+
+    # Apply font settings vào global config
+    import sys as _sys, types as _types
+    _mod = _sys.modules[__name__]
+    _mod.FONT_NAME       = main_args.font
+    _mod.FONT_SIZE_SCALE = main_args.font_size_scale
+
     run_batch(main_args)
 
 
