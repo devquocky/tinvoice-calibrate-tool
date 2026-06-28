@@ -79,9 +79,13 @@ def _sample_bg_color(img: Image.Image, px0, py0, px1, py1) -> tuple:
     return color[:3]
 
 
-def _pick_font(font_h_px: float):
-    """Chọn font phù hợp với size. Dùng PIL default hoặc font hệ thống."""
-    size = max(8, int(font_h_px * 0.78))
+def _pick_font(font_size_pt: float, render_scale: float):
+    """
+    Chọn font đúng kích thước dựa trên font size pt từ PDF gốc.
+    PIL truetype nhận size theo pt, render tại DPI = render_scale * 72.
+    Truyền render_scale để PIL biết DPI thực tế khi rasterize.
+    """
+    size = max(6, int(font_size_pt * render_scale))
     # Thử load font Windows phổ biến
     font_candidates = [
         "arial.ttf", "Arial.ttf",
@@ -91,13 +95,30 @@ def _pick_font(font_h_px: float):
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
+    dpi = int(render_scale * 72)
     for candidate in font_candidates:
         try:
-            return ImageFont.truetype(candidate, size)
+            return ImageFont.truetype(candidate, size, encoding="unic")
         except (IOError, OSError):
             continue
     # Fallback PIL built-in (sẽ nhỏ hơn mong muốn)
     return ImageFont.load_default()
+
+
+def _get_font_size_for_match(page, match: dict) -> float:
+    """
+    Đọc font size (pt) trực tiếp từ text object của PDF tại vùng match.
+    Trả về font size pt, fallback về 9.0 nếu không tìm thấy.
+    """
+    for obj in page.get_objects():
+        if obj.type != 1:
+            continue
+        b = obj.get_bounds()  # x0, y0, x1, y1 trong PDF coords
+        overlap_x = max(0, min(match["x1"], b[2]) - max(match["x0"], b[0]))
+        overlap_y = max(0, min(match["y1"], b[3]) - max(match["y0"], b[1]))
+        if overlap_x > 0 and overlap_y > 0:
+            return obj.get_font_size()
+    return 9.0  # fallback
 
 
 def process_page(page, replacements: list[dict], verbose: bool, dry_run: bool) -> tuple[Image.Image | None, list]:
@@ -151,9 +172,9 @@ def process_page(page, replacements: list[dict], verbose: bool, dry_run: bool) -
         bg_color = _sample_bg_color(img, px0, py0, px1, py1)
         draw.rectangle([px0, py0, px1, py1], fill=bg_color)
 
-        # Tính font size từ bbox height gốc (không tính padding)
-        font_h_px = py1 - (py0 + PADDING_Y)
-        font = _pick_font(font_h_px)
+        # Đọc font size pt trực tiếp từ PDF text object — không đoán qua bbox
+        font_size_pt = _get_font_size_for_match(page, m)
+        font = _pick_font(font_size_pt, RENDER_SCALE)
 
         # Vẽ text mới — vertical center trong bbox gốc
         text_y = py0 + PADDING_Y * 0.5
