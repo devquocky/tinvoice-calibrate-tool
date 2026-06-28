@@ -295,9 +295,15 @@ def run_batch(args):
                 rel = pdf_path.relative_to(input_path if input_path.is_dir() else input_path.parent)
             except ValueError:
                 rel = pdf_path.name
+            # Thêm suffix vào stem nếu có
+            if args.suffix:
+                rel = rel.with_name(rel.stem + args.suffix + rel.suffix)
             out_path = output_dir / rel
         else:
-            out_path = pdf_path
+            if args.suffix:
+                out_path = pdf_path.with_name(pdf_path.stem + args.suffix + pdf_path.suffix)
+            else:
+                out_path = pdf_path
 
         print(f"  {pdf_path.name}", end=" ... ", flush=True)
 
@@ -347,6 +353,7 @@ def main():
     p.add_argument("--dry-run",   action="store_true")
     p.add_argument("--verbose",   action="store_true")
     p.add_argument("--log",       default="pdf_replace_log.json")
+    p.add_argument("--suffix",    default="", help="Hậu tố thêm vào tên file output, VD: _replaced, _v2")
     main_args = p.parse_args()
     run_batch(main_args)
 
