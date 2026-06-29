@@ -48,8 +48,17 @@ def styled_btn(parent, text, command, style="primary", **kw):
     return btn
 
 
+# Mode colors
+MODE_ALL_BG  = "#DBEAFE"   # xanh nhạt — Replace All
+MODE_ALL_FG  = "#1D4ED8"
+MODE_SEQ_BG  = "#FEF3C7"   # vàng nhạt — Sequential
+MODE_SEQ_FG  = "#92400E"
+
+
 class ReplacementRow:
-    """Một hàng old → new trong bảng replacement."""
+    """Một hàng old → new trong bảng replacement, với mode toggle."""
+    MODES = ["replace_all", "sequential"]
+
     def __init__(self, parent, idx, on_delete):
         self.frame = tk.Frame(parent, bg=ROW_ODD if idx % 2 else ROW_EVEN,
                               pady=3, padx=6)
@@ -58,8 +67,9 @@ class ReplacementRow:
         tk.Label(self.frame, text=f"{idx+1:02d}", bg=self.frame["bg"],
                  fg=TEXT_SUB, font=FONT_MONO, width=3).pack(side="left")
 
-        self.old_var = tk.StringVar()
-        self.new_var = tk.StringVar()
+        self.old_var  = tk.StringVar()
+        self.new_var  = tk.StringVar()
+        self.mode_var = tk.StringVar(value="replace_all")
 
         e_old = tk.Entry(self.frame, textvariable=self.old_var,
                          font=FONT_UI, relief="solid", bd=1,
@@ -74,17 +84,54 @@ class ReplacementRow:
                          highlightthickness=0)
         e_new.pack(side="left", fill="x", expand=True, padx=(4, 4))
 
+        # Mode toggle button
+        self._mode_btn = tk.Button(
+            self.frame, text="ALL", width=5,
+            command=self._toggle_mode,
+            relief="flat", cursor="hand2",
+            font=("Segoe UI", 7, "bold"), padx=3, pady=2,
+            bd=0
+        )
+        self._mode_btn.pack(side="left", padx=(4, 2))
+        self._update_mode_btn()
+
         tk.Button(self.frame, text="✕", command=on_delete,
                   bg=self.frame["bg"], fg=DANGER, relief="flat",
                   font=("Segoe UI", 9, "bold"), cursor="hand2",
                   activebackground="#FEE2E2", bd=0, padx=4).pack(side="left")
 
+    def _toggle_mode(self):
+        current = self.mode_var.get()
+        next_mode = "sequential" if current == "replace_all" else "replace_all"
+        self.mode_var.set(next_mode)
+        self._update_mode_btn()
+
+    def _update_mode_btn(self):
+        mode = self.mode_var.get()
+        if mode == "replace_all":
+            self._mode_btn.configure(
+                text="ALL",
+                bg=MODE_ALL_BG, fg=MODE_ALL_FG,
+                activebackground=MODE_ALL_BG
+            )
+        else:
+            self._mode_btn.configure(
+                text="SEQ",
+                bg=MODE_SEQ_BG, fg=MODE_SEQ_FG,
+                activebackground=MODE_SEQ_BG
+            )
+
     def get(self):
         return self.old_var.get().strip(), self.new_var.get().strip()
 
-    def set(self, old, new):
+    def get_mode(self):
+        return self.mode_var.get()
+
+    def set(self, old, new, mode="replace_all"):
         self.old_var.set(old)
         self.new_var.set(new)
+        self.mode_var.set(mode)
+        self._update_mode_btn()
 
     def destroy(self):
         self.frame.destroy()
@@ -247,6 +294,8 @@ class PDFReplaceUI:
                  fg=TEXT_SUB, font=FONT_UI).pack(side="left", expand=True)
         tk.Label(hdr_row, text="Text thay thế (new)", bg=PANEL,
                  fg=TEXT_SUB, font=FONT_UI).pack(side="left", expand=True)
+        tk.Label(hdr_row, text="Mode", bg=PANEL,
+                 fg=TEXT_SUB, font=FONT_UI, width=5).pack(side="left", padx=(4, 24))
 
         # Scrollable rows container
         canvas_frame = tk.Frame(rep_outer, bg=PANEL)
@@ -333,11 +382,11 @@ class PDFReplaceUI:
         self.canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
 
     # ── Row management ────────────────────────────────────────────────────────
-    def _add_row(self, old="", new=""):
+    def _add_row(self, old="", new="", mode="replace_all"):
         idx = len(self._rows)
         row = ReplacementRow(self.rows_frame, idx,
                              on_delete=lambda r=None: self._delete_row(row))
-        row.set(old, new)
+        row.set(old, new, mode)
         self._rows.append(row)
         self.root.after(50, self._on_rows_configure)
 
@@ -369,7 +418,7 @@ class PDFReplaceUI:
         for row in self._rows:
             old, new = row.get()
             if old:
-                reps.append({"old": old, "new": new})
+                reps.append({"old": old, "new": new, "mode": row.get_mode()})
         return reps
 
     # ── File operations ───────────────────────────────────────────────────────
@@ -413,7 +462,8 @@ class PDFReplaceUI:
                 row.destroy()
             self._rows.clear()
             for item in data:
-                self._add_row(item.get("old", ""), item.get("new", ""))
+                self._add_row(item.get("old", ""), item.get("new", ""),
+                              item.get("mode", "replace_all"))
             self._log(f"Imported {len(data)} replacements từ {Path(path).name}", "ok")
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không đọc được JSON:\n{e}")

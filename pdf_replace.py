@@ -44,8 +44,8 @@ FONT_SIZE_SCALE   = 1.0       # nhân thêm vào font size đọc từ PDF (1.0 
 
 # ─── Core ─────────────────────────────────────────────────────────────────────
 
-def _get_matches(textpage, search_text: str, page_h_pt: float) -> list[dict]:
-    """Tìm tất cả matches, trả về bounding box theo PDF coords (origin bottom-left)."""
+def _get_matches(textpage, search_text: str) -> list[dict]:
+    """Tìm tất cả matches, trả về bounding box theo PDF coords, sắp xếp top→bottom."""
     searcher = textpage.search(search_text, match_case=True, match_whole_word=False)
     matches = []
     result = searcher.get_next()
@@ -61,7 +61,58 @@ def _get_matches(textpage, search_text: str, page_h_pt: float) -> list[dict]:
             })
         result = searcher.get_next()
     searcher.close()
+    # Sắp xếp top→bottom (y1 lớn = cao hơn trong PDF coords = xuất hiện trước)
+    matches.sort(key=lambda m: -m["y1"])
     return matches
+
+
+def _build_match_plan(textpage, replacements: list[dict]) -> list[dict]:
+    """
+    Xây dựng danh sách (match_bbox, new_text) theo đúng thứ tự từ trên xuống.
+
+    Hai mode:
+    - replace_all (default): tất cả instances của old → new
+    - sequential: mỗi record dùng cho instance tiếp theo theo thứ tự xuất hiện
+
+    Sequential grouping: các records cùng old string được nhóm lại,
+    dispatch lần lượt cho từng instance từ trên xuống.
+    """
+    # Tách replacements thành 2 nhóm
+    replace_all = [r for r in replacements if r.get("mode", "replace_all") == "replace_all"]
+    sequential  = [r for r in replacements if r.get("mode") == "sequential"]
+
+    plan = []  # list of {x0,y0,x1,y1, old, new}
+
+    # ── Replace All: mỗi old → tất cả instances ──
+    seen_all = {}
+    for rep in replace_all:
+        old = rep["old"]
+        if old in seen_all:
+            continue  # đã xử lý
+        seen_all[old] = True
+        matches = _get_matches(textpage, old)
+        for m in matches:
+            plan.append({**m, "old": old, "new": rep["new"]})
+
+    # ── Sequential: group theo old, dispatch theo thứ tự ──
+    # Nhóm tất cả sequential records theo old string, giữ thứ tự
+    seq_groups: dict[str, list[str]] = {}
+    for rep in sequential:
+        old = rep["old"]
+        if old not in seq_groups:
+            seq_groups[old] = []
+        seq_groups[old].append(rep["new"])
+
+    for old, new_list in seq_groups.items():
+        matches = _get_matches(textpage, old)
+        for i, m in enumerate(matches):
+            if i < len(new_list):
+                plan.append({**m, "old": old, "new": new_list[i]})
+            # instances vượt quá số records → bỏ qua (không replace)
+
+    # Sắp xếp toàn bộ plan theo thứ tự top→bottom để vẽ đúng thứ tự
+    plan.sort(key=lambda m: -m["y1"])
+    return plan
 
 
 def _pdf_to_px(x, y, w_pt, h_pt, img_w, img_h):
@@ -229,22 +280,25 @@ def process_page(page, replacements: list[dict], verbose: bool, dry_run: bool) -
     h_pt = page.get_height()
     match_log = []
 
-    # Tìm tất cả matches trước khi render (nhẹ hơn)
+    # Build match plan: xử lý cả replace_all và sequential
     textpage = page.get_textpage()
-    all_matches = []
-    for rep in replacements:
-        found = _get_matches(textpage, rep["old"], h_pt)
-        for m in found:
-            all_matches.append({**m, "old": rep["old"], "new": rep["new"]})
-            match_log.append({
-                "old": rep["old"],
-                "new": rep["new"],
-                "pdf_coords": {k: round(m[k], 2) for k in ("x0","y0","x1","y1")},
-            })
-            if verbose:
-                print(f"    Found '{rep['old']}' → '{rep['new']}' at "
-                      f"({m['x0']:.1f},{m['y0']:.1f})-({m['x1']:.1f},{m['y1']:.1f})")
+    all_matches = _build_match_plan(textpage, replacements)
     textpage.close()
+
+    for m in all_matches:
+        match_log.append({
+            "old": m["old"],
+            "new": m["new"],
+            "mode": next(
+                (r.get("mode", "replace_all") for r in replacements
+                 if r["old"] == m["old"] and r["new"] == m["new"]),
+                "replace_all"
+            ),
+            "pdf_coords": {k: round(m[k], 2) for k in ("x0","y0","x1","y1")},
+        })
+        if verbose:
+            print(f"    Found '{m['old']}' → '{m['new']}' at "
+                  f"({m['x0']:.1f},{m['y0']:.1f})-({m['x1']:.1f},{m['y1']:.1f})")
 
     if not all_matches or dry_run:
         return None, match_log
