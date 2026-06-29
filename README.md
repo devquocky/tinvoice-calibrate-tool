@@ -65,24 +65,9 @@ Kết quả mong đợi: `OK`
 
 ---
 
-## Cấu trúc thư mục
-
-```
-pdf-replacer/
-├── pdf_replace.py        # Engine xử lý chính
-├── pdf_replace_ui.py     # Giao diện đồ họa (UI)
-├── pdf_replace.bat       # Launcher CLI cho Windows
-├── replacements.example.json
-└── README.md
-```
-
-> **Quan trọng:** `pdf_replace_ui.py` và `pdf_replace.py` **phải nằm cùng thư mục** để UI hoạt động.
-
----
-
 ## Sử dụng — Giao diện đồ họa (UI)
 
-Double-click vào `pdf_replace_ui.py`, hoặc chạy:
+Double-click vào `tinvoice-calibrate-tool.bat`, hoặc chạy:
 
 ```
 python pdf_replace_ui.py
