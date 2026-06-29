@@ -13,8 +13,8 @@ import argparse
 import json
 import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
 try:
     import pypdfium2 as pdfium
@@ -38,7 +38,7 @@ PADDING_Y    = 2          # px padding dọc
 
 # Font tùy chỉnh — override bằng --font, --font-bold, --font-size-scale khi chạy
 FONT_NAME         = "arial"   # arial | carlito | lato
-FONT_BOLD = False  # True = dùng Bold variant
+FONT_BOLD         = False     # True = dùng Bold variant
 FONT_SIZE_SCALE   = 1.0       # nhân thêm vào font size đọc từ PDF (1.0 = giữ nguyên)
 
 
@@ -93,12 +93,12 @@ _FONTS_DIR = Path(__file__).parent / "fonts"
 # Map (font_name, bold) → danh sách path ưu tiên
 # Bundle trước, hệ thống sau, fallback cuối
 _FONT_PATHS: dict[tuple, list] = {
-    ("arial", False): [
+    ("arial",   False): [
         "C:/Windows/Fonts/arial.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ],
-    ("arial", True): [
+    ("arial",   True): [
         "C:/Windows/Fonts/arialbd.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -119,7 +119,7 @@ _FONT_PATHS: dict[tuple, list] = {
         "C:/Windows/Fonts/arialbd.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     ],
-    ("lato", False): [
+    ("lato",    False): [
         str(_FONTS_DIR / "Lato-Regular.ttf"),
         "C:/Windows/Fonts/Lato-Regular.ttf",
         "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
@@ -127,7 +127,7 @@ _FONT_PATHS: dict[tuple, list] = {
         "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf",
         "C:/Windows/Fonts/arial.ttf",
     ],
-    ("lato", True): [
+    ("lato",    True): [
         str(_FONTS_DIR / "Lato-Bold.ttf"),
         "C:/Windows/Fonts/Lato-Bold.ttf",
         "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
@@ -191,6 +191,35 @@ def _get_font_size_for_match(page, match: dict) -> float:
     return 9.0  # fallback
 
 
+def _get_row_py_top(page, match: dict, h_pt: float, img_h: float,
+                     row_tolerance_pt: float = 5.0) -> float:
+    """
+    Tìm py_top (pixel) cao nhất — nhỏ nhất trong pixel space —
+    của tất cả text objects cùng dòng với match.
+    Align theo TOP (ascender) của dòng vì đây là điểm chung nhất
+    giữa các font khác nhau trong cùng row.
+    """
+    match_y0 = match["y0"]
+    # py_top = (h_pt - y1) / h_pt * img_h  với y1 = top trong PDF coords
+    # Lấy py_top nhỏ nhất (cao nhất trong ảnh) của cả dòng
+    min_py_top = None
+
+    for obj in page.get_objects():
+        if obj.type != 1:
+            continue
+        b = obj.get_bounds()  # x0, y0, x1, y1
+        if abs(b[1] - match_y0) <= row_tolerance_pt:
+            py_top = (h_pt - b[3]) / h_pt * img_h  # b[3] = y1 = ascender
+            if min_py_top is None or py_top < min_py_top:
+                min_py_top = py_top
+
+    if min_py_top is None:
+        # fallback: dùng y1 của chính match
+        min_py_top = (h_pt - match["y1"]) / h_pt * img_h
+
+    return min_py_top
+
+
 def process_page(page, replacements: list[dict], verbose: bool, dry_run: bool) -> tuple[Image.Image | None, list]:
     """
     Xử lý 1 page: render → tìm matches → overlay.
@@ -249,11 +278,22 @@ def process_page(page, replacements: list[dict], verbose: bool, dry_run: bool) -
                           font_size_scale=FONT_SIZE_SCALE,
                           bold=FONT_BOLD)
 
-        # Vertical alignment: dùng baseline y0 từ PDF gốc (không dùng py0 sau padding)
-        # PDF y0 = bottom of text bbox; convert sang pixel top-of-text bằng cách
-        # lấy y1 (top trong PDF coords) → py_baseline đúng với text gốc
-        _, py_text_top = _pdf_to_px(m["x0"], m["y1"], w_pt, h_pt, img_w, img_h)
-        draw.text((px0 + PADDING_X, py_text_top), m["new"], fill=(0, 0, 0), font=font)
+        # Vertical alignment: dùng py_top cao nhất (nhỏ nhất) của cả dòng
+        # Các font khác nhau trong cùng row có ascender đồng đều hơn descender
+        # nên align theo top cho kết quả ổn định hơn
+        py_row_top = _get_row_py_top(page, m, h_pt, img_h)
+
+        # font.getbbox() trả về (left, top, right, bottom) từ draw-point
+        # top thường âm (ascender lên trên draw-point)
+        # → py_draw = py_row_top - font_top_offset
+        try:
+            _bbox = font.getbbox(m["new"])
+            font_top_offset = _bbox[1]  # thường âm hoặc 0
+        except AttributeError:
+            font_top_offset = 0
+
+        py_draw = py_row_top - font_top_offset
+        draw.text((px0 + PADDING_X, py_draw), m["new"], fill=(0, 0, 0), font=font)
 
     return img, match_log
 
@@ -436,7 +476,7 @@ def main():
     import sys as _sys
     _mod = _sys.modules[__name__]
     _mod.FONT_NAME       = main_args.font
-    _mod.FONT_BOLD = main_args.font_bold
+    _mod.FONT_BOLD       = main_args.font_bold
     _mod.FONT_SIZE_SCALE = main_args.font_size_scale
 
     run_batch(main_args)
